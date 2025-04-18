@@ -37,7 +37,7 @@ class Separator:
             "enable_denoise": False,
         },
         vr_params={
-            "batch_size": 16,
+            "batch_size": 2, # decrease to 2 from 16 due to GPU RAM
             "window_size": 512,
             "aggression": 5,
             "enable_tta": False,
