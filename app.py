@@ -71,10 +71,8 @@ def _ensure_wav(src: Path, work_dir: Path) -> Path:
 # ──────────────────────── RVC VOICE‑CONVERT ─────────────────────────────────
 class VoiceConversionRequest(BaseModel):
     pitch: conint(ge=-24, le=24)
-    input_url: HttpUrl
-    pth_url: HttpUrl
-    index_url: HttpUrl
-
+    input_url: HttpUrl          # audio (wav/mp3/flac…)
+    model_url: HttpUrl          # ZIP that holds *.pth & *.index
 
 def _voice_convert(
     wav_in: Path, wav_out: Path, pth_file: Path, index_file: Path, pitch: int
@@ -99,31 +97,50 @@ def _voice_convert(
     )
 
 
+# ─── 2.  VOICE‑CONVERT ENDPOINT ─────────────────────────────────────────────
+import zipfile, itertools
 @app.post("/voice-convert", response_class=FileResponse)
 async def voice_convert(req: VoiceConversionRequest, background: BackgroundTasks):
     tmp = Path(tempfile.mkdtemp(prefix="rvc_"))
     background.add_task(shutil.rmtree, tmp, ignore_errors=True)
 
-    wav_src = tmp / Path(req.input_url.path).name
-    pth     = tmp / "model.pth"
-    index   = tmp / "model.index"
-
+    # 2‑a. download audio & model ZIP
+    wav_src   = tmp / Path(req.input_url.path).name
+    model_zip = tmp / "model.zip"
     await asyncio.gather(
         _download(str(req.input_url), wav_src),
-        _download(str(req.pth_url),   pth),
-        _download(str(req.index_url), index),
+        _download(str(req.model_url), model_zip),
     )
 
+    # 2‑b. extract ZIP (nested folders ok)
+    extract_dir = tmp / "model"
+    extract_dir.mkdir(exist_ok=True)
+    try:
+        with zipfile.ZipFile(model_zip) as zf:
+            zf.extractall(extract_dir)
+
+        # locate first *.pth and *.index anywhere in the tree
+        pth_path   = next(itertools.chain(extract_dir.rglob("*.pth")),  None)
+        index_path = next(itertools.chain(extract_dir.rglob("*.index")), None)
+        if not pth_path or not index_path:
+            raise HTTPException(status_code=400, detail="ZIP does not contain .pth and .index")
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Uploaded model is not a valid ZIP")
+
+    # 2‑c. make sure input is WAV
     wav_for_rvc = _ensure_wav(wav_src, tmp)
     out_wav     = tmp / f"{wav_for_rvc.stem}_output.wav"
 
+    # 2‑d. run conversion in a worker thread
     try:
-        await asyncio.to_thread(_voice_convert, wav_for_rvc, out_wav, pth, index, req.pitch)
+        await asyncio.to_thread(_voice_convert, wav_for_rvc, out_wav, pth_path, index_path, req.pitch)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Conversion failed: {e}")
 
-    for p in (wav_src, pth, index, out_wav):
+    # 2‑e. schedule cleanup of every artefact
+    for p in (wav_src, model_zip, out_wav, pth_path, index_path):
         background.add_task(p.unlink, missing_ok=True)
+    background.add_task(shutil.rmtree, extract_dir, ignore_errors=True)
 
     return FileResponse(
         path=out_wav,
@@ -141,27 +158,29 @@ class UVRRequest(BaseModel):
 
 # ──────────────── patched helper ───────────────────────────────────────────
 def _uvr_separate(audio_path: Path, model_filename: str, out_dir: Path) -> list[Path]:
-    """
-    Run UVR and return a list of *absolute* Path objects for generated stems.
-    """
     from uvr.separator import Separator
 
     sep = Separator(
-        model_file_dir="uvr/tmp/audio-separator-models/",  # adjust if needed
+        model_file_dir="uvr/tmp/audio-separator-models/",
         output_dir=str(out_dir),
-        output_format="WAV",
+        output_format="MP3",
         normalization_threshold=0.9,
     )
     sep.load_model(model_filename=model_filename)
 
-    # The library may give back relative or absolute paths
     raw_paths: list[str] = sep.separate(str(audio_path))
+
+    # --- NEW: make sure every path is absolute & exists --------------------
     abs_paths: list[Path] = []
     for p in raw_paths:
         p_path = Path(p)
         if not p_path.is_absolute():
-            p_path = out_dir / p_path
-        abs_paths.append(p_path.resolve())
+            p_path = out_dir / p_path          # <─ key fix
+        p_path = p_path.resolve()
+        if not p_path.exists():
+            raise RuntimeError(f"UVR reported missing file: {p_path}")
+        abs_paths.append(p_path)
+    # ----------------------------------------------------------------------
 
     return abs_paths
 
