@@ -1,3 +1,7 @@
+```
+wget -P /rvc/models/predictors https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/rmvpe.pt
+```
+
 ## 🚀 RVC + UVR = A perfect set of tools for voice cloning, easily and free!
 
 [![Open In Collab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/iahispano/applio/blob/master/assets/Applio_NoUI.ipynb)
