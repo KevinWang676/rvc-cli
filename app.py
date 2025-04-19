@@ -39,15 +39,48 @@ app = FastAPI(
 
 # ─────────────────────── COMMON HELPERS ─────────────────────────────────────
 
+async def _download(
+    url: str,
+    dest: Path,
+    *,
+    retries: int = 3,
+    chunk_size: int = 1 << 18,      # 256 KiB
+    connect_timeout: float = 15.0,
+    read_timeout: float = 20.0,
+) -> None:
+    """
+    Robustly stream *url* → *dest*.
 
-async def _download(url: str, dest: Path) -> None:
-    """Stream *url* to *dest* (raises HTTPException on failure)."""
-    async with httpx.AsyncClient(follow_redirects=True, timeout=120) as client:
-        r = await client.get(url)
-        if r.status_code != 200:
-            raise HTTPException(status_code=400, detail=f"Failed to fetch {url}")
-        dest.write_bytes(r.content)
+    • streams in chunks (constant memory)
+    • follows redirects
+    • retries (network / timeout) with exponential back‑off
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
 
+    backoff = 1.0
+    for attempt in range(1, retries + 1):
+        try:
+            timeout_cfg = httpx.Timeout(connect_timeout, read=read_timeout)
+            async with httpx.AsyncClient(timeout=timeout_cfg, follow_redirects=True) as client:
+                async with client.stream("GET", url) as resp:
+                    if resp.status_code >= 400:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Upstream returned {resp.status_code} for {url}",
+                        )
+
+                    with dest.open("wb") as fp:
+                        async for chunk in resp.aiter_bytes(chunk_size):
+                            fp.write(chunk)
+            return  # success
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            if attempt == retries:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to fetch {url} after {retries} attempts: {exc}",
+                )
+            await asyncio.sleep(backoff)
+            backoff *= 2  # exponential back‑off
 
 def _ensure_wav(src: Path, work_dir: Path) -> Path:
     """If *src* isn’t WAV, transcode with FFmpeg → 48 kHz stereo WAV."""
