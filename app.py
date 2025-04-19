@@ -39,6 +39,7 @@ app = FastAPI(
 
 # ─────────────────────── COMMON HELPERS ─────────────────────────────────────
 
+
 async def _download(
     url: str,
     dest: Path,
@@ -46,7 +47,7 @@ async def _download(
     retries: int = 3,
     chunk_size: int = 1 << 18,      # 256 KiB
     connect_timeout: float = 15.0,
-    read_timeout: float = 20.0,
+    read_timeout: float = 60.0,
 ) -> None:
     """
     Robustly stream *url* → *dest*.
@@ -81,6 +82,7 @@ async def _download(
                 )
             await asyncio.sleep(backoff)
             backoff *= 2  # exponential back‑off
+
 
 def _ensure_wav(src: Path, work_dir: Path) -> Path:
     """If *src* isn’t WAV, transcode with FFmpeg → 48 kHz stereo WAV."""
@@ -126,7 +128,7 @@ def _voice_convert(
         hop_length=128,
         f0_method="rmvpe",
         split_audio=False,
-        export_format="MP3",
+        export_format="WAV",
         embedder_model="contentvec",
         sid=0,
     )
@@ -164,32 +166,25 @@ async def voice_convert(req: VoiceConversionRequest, background: BackgroundTasks
 
     # 2‑c. make sure input is WAV
     wav_for_rvc = _ensure_wav(wav_src, tmp)
-    
-    # ----- output filename ends with .mp3 instead of .wav ----------------------
-    out_mp3 = tmp / f"{wav_for_rvc.stem}_output.mp3"
-    # --------------------------------------------------------------------------
-    
-    # 2‑d. run conversion
+    out_wav     = tmp / f"{wav_for_rvc.stem}_output.wav"
+
+    # 2‑d. run conversion in a worker thread
     try:
-        await asyncio.to_thread(
-            _voice_convert, wav_for_rvc, out_mp3, pth_path, index_path, req.pitch
-        )
+        await asyncio.to_thread(_voice_convert, wav_for_rvc, out_wav, pth_path, index_path, req.pitch)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Conversion failed: {e}")
-    
-    # 2‑e. schedule cleanup
-    for p in (wav_src, model_zip, out_mp3, pth_path, index_path):
+
+    # 2‑e. schedule cleanup of every artefact
+    for p in (wav_src, model_zip, out_wav, pth_path, index_path):
         background.add_task(p.unlink, missing_ok=True)
     background.add_task(shutil.rmtree, extract_dir, ignore_errors=True)
-    
-    # ----- return MP3 with correct MIME type -----------------------------------
+
     return FileResponse(
-        path=out_mp3,
-        media_type="audio/mpeg",
-        filename=f"{uuid.uuid4().hex}.mp3",
+        path=out_wav,
+        media_type="audio/wav",
+        filename=f"{uuid.uuid4().hex}.wav",
         background=background,
     )
-
 
 
 # ────────────────────────── UVR VOCAL REMOVAL ───────────────────────────────
