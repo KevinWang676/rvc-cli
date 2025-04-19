@@ -46,8 +46,8 @@ async def _download(
     *,
     retries: int = 3,
     chunk_size: int = 1 << 18,      # 256 KiB
-    connect_timeout: float = 15.0,
-    read_timeout: float = 60.0,
+    connect_timeout: float = 10.0,
+    read_timeout: float = 10.0,
 ) -> None:
     """
     Robustly stream *url* → *dest*.
