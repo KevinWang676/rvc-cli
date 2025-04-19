@@ -22,6 +22,8 @@ import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, HttpUrl, conint
+from fastapi.responses import JSONResponse
+import base64
 
 # ─────────────── RVC IMPORT (lazy singleton) ────────────────────────────────
 from rvc_cli import import_voice_converter  # change if your module is named differently
@@ -184,14 +186,16 @@ def _uvr_separate(audio_path: Path, model_filename: str, out_dir: Path) -> list[
 
     return abs_paths
 
-@app.post("/uvr-remove", response_class=FileResponse)
+@app.post("/uvr-remove", response_class=JSONResponse)
 async def uvr_remove(req: UVRRequest, background: BackgroundTasks):
     tmp = Path(tempfile.mkdtemp(prefix="uvr_"))
     background.add_task(shutil.rmtree, tmp, ignore_errors=True)
 
+    # 1. download the audio to be separated
     src = tmp / Path(req.audio_url.path).name
     await _download(str(req.audio_url), src)
 
+    # 2. call UVR
     try:
         stems = await asyncio.to_thread(_uvr_separate, src, req.model_filename, tmp)
     except FileNotFoundError:
@@ -199,20 +203,31 @@ async def uvr_remove(req: UVRRequest, background: BackgroundTasks):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"UVR failed: {e}")
 
-    if not stems:
-        raise HTTPException(status_code=500, detail="No stems produced.")
+    if not stems or len(stems) < 2:
+        raise HTTPException(status_code=500, detail="UVR did not produce two stems.")
 
-    zip_path = tmp / f"{uuid.uuid4().hex}.zip"
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for f in stems:
-            zf.write(f, arcname=f.name)
+    # 3. find which stem is vocals / instrumental (UVR naming convention)
+    vocals_path = next((p for p in stems if "vocal" in p.stem.lower()), stems[0])
+    inst_path   = next((p for p in stems if "instrumental" in p.stem.lower()), stems[1])
 
-    for p in stems + [src, zip_path]:
+    def _b64(path: Path) -> str:
+        """read file and base‑64 encode → str (ascii)"""
+        return base64.b64encode(path.read_bytes()).decode("ascii")
+
+    # 4. encode and build response
+    payload = {
+        "vocals": {
+            "filename": vocals_path.name,
+            "base64_wav": _b64(vocals_path),
+        },
+        "instrumental": {
+            "filename": inst_path.name,
+            "base64_wav": _b64(inst_path),
+        },
+    }
+
+    # 5. clean up temp artefacts
+    for p in stems + [src]:
         background.add_task(p.unlink, missing_ok=True)
 
-    return FileResponse(
-        path=zip_path,
-        media_type="application/zip",
-        filename="uvr_output.zip",
-        background=background,
-    )
+    return JSONResponse(content=payload)
