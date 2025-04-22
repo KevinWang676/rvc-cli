@@ -8,7 +8,7 @@ Run:
     uvicorn app:app --host 0.0.0.0 --port 8000
 """
 
-import asyncio
+import asyncio, os
 import mimetypes
 import shutil
 import subprocess
@@ -122,7 +122,7 @@ def _voice_convert(
         index_path=str(index_file),
         pitch=pitch,
         filter_radius=3,
-        index_rate=0.3,
+        index_rate=0.7,
         volume_envelope=1.0,
         protect=0.33,
         hop_length=128,
@@ -130,6 +130,7 @@ def _voice_convert(
         split_audio=False,
         export_format="WAV",
         embedder_model="contentvec",
+        #embedder_model_custom="hubert",
         sid=0,
     )
 
@@ -138,7 +139,7 @@ def _voice_convert(
 import zipfile, itertools
 @app.post("/voice-convert", response_class=FileResponse)
 async def voice_convert(req: VoiceConversionRequest, background: BackgroundTasks):
-    tmp = Path(tempfile.mkdtemp(prefix="rvc_"))
+    tmp = Path("./temp") #Path(tempfile.mkdtemp(prefix="rvc_"))
     background.add_task(shutil.rmtree, tmp, ignore_errors=True)
 
     # 2‑a. download audio & model ZIP
@@ -223,7 +224,7 @@ def _uvr_separate(audio_path: Path, model_filename: str, out_dir: Path) -> list[
 
 @app.post("/uvr-remove", response_class=JSONResponse)
 async def uvr_remove(req: UVRRequest, background: BackgroundTasks):
-    tmp = Path(tempfile.mkdtemp(prefix="uvr_"))
+    tmp = Path("./temp") #Path(tempfile.mkdtemp(prefix="uvr_"))
     background.add_task(shutil.rmtree, tmp, ignore_errors=True)
 
     # 1. download the audio to be separated
