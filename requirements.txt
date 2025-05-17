@@ -10,7 +10,7 @@ wget
 # Audio processing
 ffmpeg-python>=0.2.0
 faiss-cpu==1.7.3
-#librosa==0.9.2 # 与 seed vc 版本冲突
+librosa==0.9.2 # 与 seed vc 版本冲突
 scipy==1.11.1
 soundfile==0.12.1
 noisereduce
@@ -21,12 +21,9 @@ stftpitchshift
 omegaconf>=2.0.6; sys_platform == 'darwin' 
 numba; sys_platform == 'linux'
 numba==0.57.0; sys_platform == 'darwin' or sys_platform == 'win32'
-#torch==2.3.1
-#torchaudio==2.3.1
-#torchvision==0.18.1
-torch
-torchaudio
-torchvision
+torch==2.3.1
+torchaudio==2.3.1
+torchvision==0.18.1
 torchcrepe==0.0.23
 torchfcpe
 einops
@@ -36,13 +33,13 @@ transformers==4.44.2
 # Visualization and UI
 matplotlib==3.7.2
 tensorboard
-gradio==4.43.0
+#gradio==4.43.0
 
 # Miscellaneous utilities
 certifi>=2023.07.22; sys_platform == 'darwin'  
 antlr4-python3-runtime==4.8; sys_platform == 'darwin'
 tensorboardX
-edge-tts==6.1.9
+#edge-tts==6.1.9
 pypresence
 beautifulsoup4
 flask
